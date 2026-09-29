@@ -2,8 +2,10 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useWorkshopStore, type Cue, type Department } from '../stores/workshop'
+import { useVenueStore } from '../stores/venues'
 
 const store = useWorkshopStore()
+const venueStore = useVenueStore()
 const commentText = ref('')
 const showRouteEditor = ref(true)
 const departments: Array<'全部' | Department> = ['全部', '舞台', '灯光', '音响', '道具']
@@ -69,6 +71,20 @@ function updateCue(key: keyof Cue, value: unknown) {
       description="系统已高亮冲突提示，请在右侧检查触发时间与部门优先级。"
     />
 
+    <el-alert
+      v-if="!venueStore.isBaseline && venueStore.dangerTotal"
+      class="conflict-alert"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="`当前场地「${venueStore.activeVenue.name}」有 ${venueStore.dangerTotal} 个节点落入危险区`"
+    >
+      <template #default>
+        换算后靠近侧幕、升降台禁入区或乐池的节点已单独列出，相关场景暂缓锁定。
+        <el-button size="small" type="danger" plain @click="$router.push('/venue')">前往场地适配</el-button>
+      </template>
+    </el-alert>
+
     <div class="toolbar panel">
       <div class="filter-group">
         <span>幕次</span>
@@ -86,6 +102,9 @@ function updateCue(key: keyof Cue, value: unknown) {
       </div>
       <el-switch v-model="showRouteEditor" active-text="路线编辑" />
       <el-button @click="store.addCue" :disabled="store.locked">新增提示</el-button>
+      <el-tag :type="venueStore.isBaseline ? 'info' : venueStore.dangerTotal ? 'danger' : 'warning'" effect="plain" @click="$router.push('/venue')" style="cursor: pointer">
+        {{ venueStore.activeVenue.name }}
+      </el-tag>
       <el-tag :type="store.locked ? 'success' : 'info'" effect="plain">{{ store.locked ? '基线已锁定' : '草稿编辑中' }}</el-tag>
     </div>
 

@@ -1,10 +1,12 @@
 import { http, HttpResponse } from 'msw'
 import { seedCues, seedMovers, seedProject } from '../stores/workshop'
+import { seedVenues } from '../stores/venues'
 
 let cues = structuredClone(seedCues)
 
 export const handlers = [
   http.get('/api/project', () => HttpResponse.json(seedProject)),
+  http.get('/api/venues', () => HttpResponse.json(seedVenues)),
   http.get('/api/cues', () =>
     HttpResponse.json(
       cues.map((cue) => ({

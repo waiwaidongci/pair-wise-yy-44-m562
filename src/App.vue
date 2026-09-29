@@ -11,6 +11,7 @@ const title = computed(() => String(route.meta.title ?? '巡演舞台'))
 const nav = [
   { to: '/', label: '巡演总览', icon: '总' },
   { to: '/stage', label: '舞台走位', icon: '图' },
+  { to: '/venue', label: '场地适配', icon: '场' },
   { to: '/script', label: '排练脚本', icon: '序' },
   { to: '/print', label: '打印中心', icon: '印' },
 ]
