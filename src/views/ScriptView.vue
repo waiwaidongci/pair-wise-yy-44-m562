@@ -7,6 +7,12 @@ const store = useWorkshopStore()
 const query = ref('')
 const selectedAct = ref('全部')
 const acts = computed(() => ['全部', ...new Set(store.cues.map((cue) => cue.act))])
+const statusByScene = computed(() => {
+  const map = new Map(store.activeSceneStatuses.map((status) => [status.scene, status]))
+  return map
+})
+const adaptedById = computed(() => new Map(store.activeAdaptedCues.map((item) => [item.cue.id, item])))
+const suspendedCount = computed(() => store.activeSceneStatuses.filter((status) => status.suspended).length)
 const script = computed(() =>
   [...store.cues]
     .filter((cue) => selectedAct.value === '全部' || cue.act === selectedAct.value)
@@ -21,8 +27,34 @@ function confirmCue(id: string) {
 }
 
 function lock() {
-  store.lockBaseline()
-  ElMessage.success('演出基线已锁定，后续修改将从新分支开始')
+  // 基线“锁定演出基线”：危险区节点未清零的场景保持暂缓
+  const clearScenes = store.activeSceneStatuses.filter((status) => !status.suspended)
+  clearScenes.forEach((status) => {
+    const cue = status.cues[0]
+    if (cue) store.lockScene(store.activeVenueId, cue.act, cue.scene)
+  })
+  if (store.isBaselineActive) {
+    store.cues.forEach((cue) => {
+      cue.status = '已确认'
+    })
+  }
+  if (suspendedCount.value) {
+    ElMessage.warning(`已锁定可锁定场景；${suspendedCount.value} 个场景因危险区节点暂缓`)
+  } else {
+    ElMessage.success('演出基线已锁定，后续修改将从新分支开始')
+  }
+}
+
+type TagType = 'danger' | 'warning' | 'info' | 'success' | 'primary'
+function cueTags(cueId: string): Array<{ text: string; type: TagType }> {
+  const item = adaptedById.value.get(cueId)
+  if (!item) return []
+  const tags: Array<{ text: string; type: TagType }> = []
+  if (item.pendingAdaptation) tags.push({ text: '待换算', type: 'info' })
+  else if (item.stale) tags.push({ text: '待重算', type: 'warning' })
+  if (item.dangerNodes.length) tags.push({ text: `危险区×${item.dangerNodes.length}`, type: 'danger' })
+  else if (item.warningNodes.length) tags.push({ text: '靠近侧幕', type: 'warning' })
+  return tags
 }
 </script>
 
@@ -35,6 +67,7 @@ function lock() {
         <p class="muted">提示与走位按时间码串联；未确认节点不会进入锁定基线。</p>
       </div>
       <div class="actions">
+        <el-button @click="$router.push('/venues')">场地适配</el-button>
         <el-button :disabled="store.locked" @click="lock">锁定演出基线</el-button>
         <el-button v-if="store.locked" type="warning" plain @click="store.unlockBaseline">解锁修订</el-button>
         <el-button type="primary" @click="$router.push('/print')">生成执行清单</el-button>
@@ -44,9 +77,17 @@ function lock() {
     <div class="panel script-toolbar">
       <el-input v-model="query" clearable placeholder="搜索提示、角色或说明" style="max-width: 320px" />
       <el-segmented v-model="selectedAct" :options="acts" />
+      <div class="venue-inline">
+        <span>场地视角：</span>
+        <el-select v-model="store.activeVenueId" size="small" style="width: 210px">
+          <el-option v-for="venue in store.venues" :key="venue.id" :label="venue.name" :value="venue.id" />
+        </el-select>
+      </div>
       <div class="baseline-status">
         <span class="status-dot" :style="{ background: store.locked ? '#41936b' : '#d68c27' }" />
-        {{ store.locked ? `基线 ${store.revision} 已锁定` : `${store.revision} · ${store.cues.filter((cue) => cue.status !== '已确认').length} 项待确认` }}
+        {{ store.locked
+          ? `基线 ${store.revision} 已锁定`
+          : `${store.revision} · 暂缓场景 ${suspendedCount} · 待确认 ${store.cues.filter((cue) => cue.status !== '已确认').length}` }}
       </div>
     </div>
 
@@ -67,9 +108,18 @@ function lock() {
                 <span>{{ cue.id }} · {{ cue.act }} / {{ cue.scene }}</span>
                 <h3>{{ cue.title }}</h3>
               </div>
-              <el-tag :type="cue.status === '已确认' ? 'success' : cue.status === '待确认' ? 'warning' : 'info'" effect="plain">
-                {{ cue.status }}
-              </el-tag>
+              <div class="card-tags">
+                <el-tag
+                  v-for="tag in cueTags(cue.id)"
+                  :key="tag.text"
+                  :type="tag.type"
+                  effect="plain"
+                  size="small"
+                >{{ tag.text }}</el-tag>
+                <el-tag :type="cue.status === '已确认' ? 'success' : cue.status === '待确认' ? 'warning' : 'info'" effect="plain">
+                  {{ cue.status }}
+                </el-tag>
+              </div>
             </div>
             <p>{{ cue.note || '暂无补充说明' }}</p>
             <div class="script-meta">
@@ -77,11 +127,27 @@ function lock() {
               <span>部门：{{ cue.department }}</span>
               <span>路线：{{ cue.route.length }} 节点</span>
               <span v-if="cue.comments.length">留言：{{ cue.comments.length }}</span>
+              <span v-if="adaptedById.get(cue.id)?.dangerNodes.length" class="danger-meta">
+                危险节点 {{ adaptedById.get(cue.id)?.dangerNodes.length }}
+              </span>
+            </div>
+            <div v-if="adaptedById.get(cue.id)?.dangerNodes.length" class="script-hazards">
+              <span v-for="node in adaptedById.get(cue.id)!.dangerNodes" :key="`${node.kind}-${node.index}`">
+                ⛔ {{ node.label }} ({{ node.point.x.toFixed(1) }}, {{ node.point.d.toFixed(1) }})m · {{ node.hazards.map((h) => h.label).join('、') }}
+              </span>
             </div>
             <div class="script-actions">
               <el-button size="small" @click="store.selectedId = cue.id; $router.push('/stage')">编辑走位</el-button>
+              <el-button size="small" @click="store.selectedId = cue.id; $router.push('/venues')">场地适配</el-button>
               <el-button v-if="cue.status !== '已确认'" size="small" type="primary" plain @click="confirmCue(cue.id)">确认节点</el-button>
               <span v-else class="confirmed">已纳入 {{ store.revision }}</span>
+              <el-tag
+                v-if="statusByScene.get(`${cue.act} · ${cue.scene}`)?.locked"
+                type="success"
+                size="small"
+                effect="dark"
+                style="margin-left: auto"
+              >{{ store.activeVenue.shortName }}场景已锁</el-tag>
             </div>
           </div>
         </article>
@@ -131,6 +197,38 @@ function lock() {
   margin-left: auto;
   color: #5e6d79;
   font-size: 12px;
+}
+
+.venue-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #5e6d79;
+  font-size: 12px;
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.danger-meta {
+  color: #c0392b;
+  font-weight: 700;
+}
+
+.script-hazards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fdf0ee;
+  color: #b03a2c;
+  font-size: 11px;
 }
 
 .script-layout {
